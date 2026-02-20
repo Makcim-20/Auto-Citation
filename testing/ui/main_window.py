@@ -23,7 +23,6 @@ from core.style_registry import list_styles, editor_fields_for_csl
 
 # ✅ step 5: config + paths
 from core.config import load_config, save_config, AppConfig
-from core.paths import app_styles_dir, user_styles_dir
 
 
 @dataclass
@@ -80,8 +79,9 @@ class MainWindow(QMainWindow):
         self.btn_open = QPushButton("폴더 열기")
         self.btn_reload = QPushButton("다시 로드")
 
-        # ✅ Step 5: refresh styles
-        self.btn_refresh_styles = QPushButton("스타일 새로고침")
+        self.btn_csl_folder = QPushButton("CSL 폴더 선택...")
+        self.lbl_csl_folder = QLabel("CSL 폴더: (미지정)")
+        self.lbl_csl_folder.setToolTip("이 폴더 안의 .csl 파일이 스타일 목록에 표시됩니다")
 
         self.btn_save = QPushButton("저장(원본 RIS 반영)")
         self.btn_export = QPushButton("내보내기(output)")
@@ -93,7 +93,8 @@ class MainWindow(QMainWindow):
 
         top_l.addWidget(self.btn_open)
         top_l.addWidget(self.btn_reload)
-        top_l.addWidget(self.btn_refresh_styles)
+        top_l.addWidget(self.btn_csl_folder)
+        top_l.addWidget(self.lbl_csl_folder)
         top_l.addSpacing(12)
         top_l.addWidget(QLabel("스타일"))
         top_l.addWidget(self.style_combo)
@@ -232,6 +233,9 @@ class MainWindow(QMainWindow):
             if idx >= 0:
                 self.sort_combo.setCurrentIndex(idx)
 
+        # CSL 폴더 레이블 초기화
+        self._update_csl_folder_label()
+
         # Populate style list (also restores last style)
         self._reload_styles()
         self._apply_editor_field_visibility_for_style()
@@ -239,7 +243,7 @@ class MainWindow(QMainWindow):
         # Wire signals
         self.btn_open.clicked.connect(self.on_open_folder)
         self.btn_reload.clicked.connect(self.on_reload)
-        self.btn_refresh_styles.clicked.connect(self.on_refresh_styles)
+        self.btn_csl_folder.clicked.connect(self.on_select_csl_folder)
         self.btn_save.clicked.connect(self.on_save_back)
         self.btn_export.clicked.connect(self.on_export)
         self.btn_copy_all.clicked.connect(self.on_copy_all)
@@ -285,18 +289,22 @@ class MainWindow(QMainWindow):
 
     def _reload_styles(self):
         """
-        builtin + (app/user) styles/*.csl 을 콤보박스에 로드.
+        builtin + 사용자 지정 CSL 폴더(+ fallback: app/user styles)의 .csl 파일을 콤보박스에 로드.
         - config의 last_style 우선 적용
         """
+        from pathlib import Path
+
         prev = self._current_style_selector() if self.style_combo.count() else None
 
         self.style_combo.clear()
 
-        # style_registry가 step5 버전이면 styles_dir 인자를 안 받을 수도 있어서 안전하게 호출
-        try:
-            styles = list_styles(include_builtin=True, include_csl=True)  # step5
-        except TypeError:
-            styles = list_styles(styles_dir="styles", include_builtin=True, include_csl=True)  # legacy
+        extra_dir: Path | None = None
+        if self.cfg.csl_folder:
+            p = Path(self.cfg.csl_folder)
+            if p.is_dir():
+                extra_dir = p
+
+        styles = list_styles(include_builtin=True, include_csl=True, extra_csl_dir=extra_dir)
 
         for s in styles:
             label = s.name if s.kind == "builtin" else f"{s.name} (CSL)"
@@ -357,32 +365,38 @@ class MainWindow(QMainWindow):
         for key, widget in self.editor_field_widgets.items():
             self.editor_form.setRowVisible(widget, key in visible_fields)
 
-    def on_refresh_styles(self):
-        """
-        styles 폴더를 다시 스캔해서 콤보박스 갱신.
-        """
-        # 폴더 없으면 만들어줌 (사람들은 폴더 만드는 걸 싫어하니까)
-        app_styles_dir().mkdir(parents=True, exist_ok=True)
-        user_styles_dir().mkdir(parents=True, exist_ok=True)
+    def _update_csl_folder_label(self):
+        folder = self.cfg.csl_folder
+        if folder:
+            from pathlib import Path
+            p = Path(folder)
+            count = len(list(p.glob("*.csl"))) if p.is_dir() else 0
+            self.lbl_csl_folder.setText(f"CSL 폴더: {p.name}  ({count}개)")
+            self.lbl_csl_folder.setToolTip(str(p))
+        else:
+            self.lbl_csl_folder.setText("CSL 폴더: (미지정)")
+            self.lbl_csl_folder.setToolTip("이 폴더 안의 .csl 파일이 스타일 목록에 표시됩니다")
 
+    def on_select_csl_folder(self):
+        """
+        사용자가 CSL 파일이 들어있는 폴더를 직접 선택.
+        선택 즉시 스타일 목록이 갱신된다.
+        """
+        folder = QFileDialog.getExistingDirectory(self, "CSL 스타일 폴더 선택", self.cfg.csl_folder or "")
+        if not folder:
+            return
+
+        self.cfg.csl_folder = folder
+        self._persist_ui_config()
+        self._update_csl_folder_label()
         self._reload_styles()
         self._apply_editor_field_visibility_for_style()
-        self._persist_ui_config()
 
-        # 프로젝트가 있으면 즉시 반영
         if self.project:
             self.project.settings.style_id = self._current_style_selector()
             self.project.settings.sort_mode = self._current_sort_mode()  # type: ignore
             self._refresh_all_preview()
             self._refresh_one_preview()
-
-        QMessageBox.information(
-            self,
-            "스타일 갱신",
-            "CSL 스타일을 폴더에 넣고 다시 누르면 목록이 갱신됩니다.\n\n"
-            f"- 앱 styles: {app_styles_dir()}\n"
-            f"- 사용자 styles: {user_styles_dir()}"
-        )
 
     # -----------------------------
     # Folder load / project

@@ -161,15 +161,22 @@ def list_styles(
     *,
     include_builtin: bool = True,
     include_csl: bool = True,
+    extra_csl_dir: Optional[Path] = None,
 ) -> List[StyleRef]:
+    """
+    extra_csl_dir: 사용자가 UI에서 선택한 CSL 폴더. 우선순위 최상위.
+    """
     styles: List[StyleRef] = []
 
     if include_builtin:
         styles.extend(discover_builtin_styles())
 
     if include_csl:
-        # ✅ 사용자 styles 먼저: 같은 이름이면 사용자 것이 우선
-        dirs = [user_styles_dir(), app_styles_dir()]
+        dirs: List[Path] = []
+        if extra_csl_dir is not None:
+            dirs.append(extra_csl_dir)
+        # 내장 폴더는 extra_csl_dir이 없을 때 fallback으로만 사용
+        dirs.extend([user_styles_dir(), app_styles_dir()])
         styles.extend(discover_csl_styles(dirs))
 
     styles.sort(key=lambda s: (s.kind, s.name.lower()))
