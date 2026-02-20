@@ -150,6 +150,10 @@ class Record:
     doi: Optional[str] = None
     url: Optional[str] = None
 
+    # 언어 코드: "ko", "en", "zh", "ja" 등
+    # 비어 있으면 동아시아(한국어) 서식, 값이 있으면 해당 언어 서식으로 렌더링
+    language: Optional[str] = None
+
     # Extra fields (lossless)
     raw_fields: Dict[str, Any] = field(default_factory=dict)
 
@@ -198,6 +202,7 @@ class Record:
         # Enums to values
         d["source_format"] = self.source_format.value
         d["type"] = self.type.value
+        d["language"] = self.language
         # issues: enum handling
         for it in d.get("issues", []):
             if isinstance(it.get("severity"), Severity):
@@ -239,6 +244,7 @@ class Record:
             institution=d.get("institution"),
             doi=d.get("doi"),
             url=d.get("url"),
+            language=d.get("language"),
             raw_fields=dict(d.get("raw_fields", {})),
             dirty=bool(d.get("dirty", False)),
             issues=issues,

@@ -127,6 +127,27 @@ def _parse_year(raw: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+_LA_NORMALIZE: Dict[str, str] = {
+    # 한국어
+    "korean": "ko", "kor": "ko", "ko": "ko", "한국어": "ko",
+    # 영어
+    "english": "en", "eng": "en", "en": "en",
+    # 중국어
+    "chinese": "zh", "chi": "zh", "zho": "zh", "zh": "zh",
+    # 일본어
+    "japanese": "ja", "jpn": "ja", "ja": "ja",
+}
+
+
+def _parse_language(raw: Dict[str, Any]) -> Optional[str]:
+    """RIS LA 태그 → 정규화된 언어 코드 (ko/en/zh/ja/...)."""
+    v = _get_first(raw, "LA")
+    if not v:
+        return None
+    normalized = _LA_NORMALIZE.get(v.strip().lower())
+    return normalized or v.strip().lower()[:10]
+
+
 def _parse_pages(raw: Dict[str, Any]) -> Optional[str]:
     sp = _get_first(raw, "SP")
     ep = _get_first(raw, "EP")
@@ -261,6 +282,7 @@ def parse_ris_text(
         rec.url = url
         rec.publisher = publisher
         rec.institution = institution
+        rec.language = _parse_language(raw)
 
         records.append(rec)
 
