@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from core.model import Project, ProjectSettings, Record, RecordType, Severity
 from core.project import load_project, refresh_project, save_project_back_to_sources, export_outputs
 from core.normalize import normalize_record
-from core.validate import validate_record
+from core.validate import validate_record, filter_issues_for_fields
 from core.formatting import format_references
 
 # ✅ styles registry (builtin + csl)
@@ -546,12 +546,36 @@ class MainWindow(QMainWindow):
             self._refresh_all_preview()
             self._refresh_one_preview()
 
+    def _get_csl_relevant_fields(self):
+        """
+        현재 선택된 스타일이 CSL이면 해당 스타일에서 사용하는 editor 필드 Set을 반환.
+        builtin 스타일이거나 CSL 필드를 파악할 수 없으면 None 반환.
+        """
+        style_selector = self._current_style_selector()
+        if not style_selector.startswith("csl:"):
+            return None
+        csl_path = style_selector.split(":", 1)[1]
+        fields = editor_fields_for_csl(csl_path)
+        return fields if fields else None
+
     def _refresh_issues_view(self, r: Record):
+        all_issues = r.issues or []
+        relevant_fields = self._get_csl_relevant_fields()
+
+        if relevant_fields is not None:
+            visible_issues = filter_issues_for_fields(all_issues, relevant_fields)
+            hidden_count = len(all_issues) - len(visible_issues)
+        else:
+            visible_issues = all_issues
+            hidden_count = 0
+
         lines: List[str] = []
-        for it in (r.issues or []):
+        for it in visible_issues:
             lines.append(f"[{it.severity.value.upper():5}] {it.field}: {it.message}")
         if not lines:
             lines = ["(이슈 없음)"]
+        if hidden_count > 0:
+            lines.append(f"\n※ {hidden_count}개 이슈 숨김 (현재 CSL 스타일에서 사용하지 않는 필드)")
         self.issues_view.setPlainText("\n".join(lines))
 
     def _refresh_one_preview(self):
