@@ -167,6 +167,10 @@ def record_to_csl_item(record: Record) -> Dict[str, Any]:
         if "publisher" not in item:
             item["publisher"] = institution
 
+    language = _strip_or_none(getattr(record, "language", None))
+    if language:
+        item["language"] = language
+
     # Type-specific helpful fields (필요할 때 확장)
     # paper-conference: event-title, event-place, publisher-place 등
     # thesis: genre ("Master's thesis" 등), archive 등

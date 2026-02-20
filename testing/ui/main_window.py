@@ -177,7 +177,18 @@ class MainWindow(QMainWindow):
         self.publisher_edit = QLineEdit()
         self.institution_edit = QLineEdit()
 
+        # 언어 콤보박스 (편집 가능 — RIS에 없으면 사용자가 직접 입력)
+        self.language_combo = QComboBox()
+        self.language_combo.setEditable(True)
+        self.language_combo.addItems(["", "ko", "en", "zh", "ja"])
+        self.language_combo.setToolTip(
+            "비워두면 동아시아(한국어) 서식 · 값이 있으면 영미권 서식으로 렌더링"
+        )
+        if hasattr(self.language_combo, "lineEdit") and self.language_combo.lineEdit():
+            self.language_combo.lineEdit().setPlaceholderText("비어 있으면 동아시아 기본")
+
         form.addRow("유형", self.type_combo)
+        form.addRow("언어", self.language_combo)
         form.addRow("제목", self.title_edit)
         form.addRow("대체 제목", self.title_alt_edit)
         form.addRow("연도", self.year_spin)
@@ -193,6 +204,7 @@ class MainWindow(QMainWindow):
 
         self.editor_field_widgets = {
             "type": self.type_combo,
+            "language": self.language_combo,
             "title": self.title_edit,
             "title_alt": self.title_alt_edit,
             "year": self.year_spin,
@@ -288,6 +300,7 @@ class MainWindow(QMainWindow):
 
         # Editor change signals
         self.type_combo.currentIndexChanged.connect(self.on_edit_changed)
+        self.language_combo.currentTextChanged.connect(self.on_edit_changed)
         self.title_edit.textEdited.connect(self.on_edit_changed)
         self.title_alt_edit.textEdited.connect(self.on_edit_changed)
         self.year_spin.valueChanged.connect(self.on_edit_changed)
@@ -311,7 +324,8 @@ class MainWindow(QMainWindow):
         self.list_records.setEnabled(enabled)
 
         for w in [
-            self.type_combo, self.title_edit, self.title_alt_edit, self.year_spin,
+            self.type_combo, self.language_combo,
+            self.title_edit, self.title_alt_edit, self.year_spin,
             self.authors_edit, self.container_edit, self.volume_edit, self.issue_edit,
             self.pages_edit, self.doi_edit, self.url_edit, self.publisher_edit, self.institution_edit
         ]:
@@ -410,8 +424,8 @@ class MainWindow(QMainWindow):
             else:
                 visible_fields = set(self.editor_field_widgets.keys())
 
-        # type 선택기는 항상 표시
-        visible_fields = visible_fields | {"type"}
+        # type·language는 항상 표시 (서식 결정에 핵심)
+        visible_fields = visible_fields | {"type", "language"}
 
         for key, widget in self.editor_field_widgets.items():
             self.editor_form.setRowVisible(widget, key in visible_fields)
@@ -467,6 +481,7 @@ class MainWindow(QMainWindow):
         """snap 딕셔너리의 내용을 target Record에 덮어씀."""
         src = Record.from_dict(snap)
         target.type = src.type
+        target.language = src.language
         target.title = src.title
         target.title_alt = src.title_alt
         target.year = src.year
@@ -624,6 +639,7 @@ class MainWindow(QMainWindow):
     def _load_record_into_editor(self, r: Record):
         blockers = [
             QSignalBlocker(self.type_combo),
+            QSignalBlocker(self.language_combo),
             QSignalBlocker(self.title_edit),
             QSignalBlocker(self.title_alt_edit),
             QSignalBlocker(self.year_spin),
@@ -641,6 +657,13 @@ class MainWindow(QMainWindow):
             idx = self.type_combo.findText(r.type.value)
             if idx >= 0:
                 self.type_combo.setCurrentIndex(idx)
+
+            lang = r.language or ""
+            lang_idx = self.language_combo.findText(lang)
+            if lang_idx >= 0:
+                self.language_combo.setCurrentIndex(lang_idx)
+            else:
+                self.language_combo.setCurrentText(lang)
 
             self.title_edit.setText(r.title or "")
             self.title_alt_edit.setText(r.title_alt or "")
@@ -680,6 +703,7 @@ class MainWindow(QMainWindow):
             # ──────────────────────────────────────────────────────────────
 
             r.type = new_type
+            r.language = self.language_combo.currentText().strip() or None
             r.title = self.title_edit.text().strip() or None
             r.title_alt = self.title_alt_edit.text().strip() or None
 

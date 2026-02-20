@@ -377,6 +377,8 @@ def record_to_ris_lines(record: Record) -> List[str]:
         lines.append(_format_ris_line("PB", record.publisher))
     if record.institution:
         lines.append(_format_ris_line("IN", record.institution))
+    if record.language:
+        lines.append(_format_ris_line("LA", record.language))
 
     if record.doi:
         lines.append(_format_ris_line("DO", record.doi))
@@ -385,7 +387,7 @@ def record_to_ris_lines(record: Record) -> List[str]:
 
     # Remove tags that we already emitted from raw (to reduce duplication)
     # (We intentionally keep raw_fields to preserve extras, but avoid obvious duplicates.)
-    for t in ["TY", "TI", "T1", "AU", "A1", "PY", "Y1", "DA", "JO", "JF", "T2", "VL", "IS", "SP", "EP", "PB", "IN", "DO", "UR", "ER"]:
+    for t in ["TY", "TI", "T1", "AU", "A1", "PY", "Y1", "DA", "JO", "JF", "T2", "VL", "IS", "SP", "EP", "PB", "IN", "LA", "DO", "UR", "ER"]:
         raw.pop(t, None)
 
     # Write remaining raw tags (lossless-ish)

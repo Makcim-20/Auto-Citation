@@ -213,6 +213,7 @@ _CSL_VAR_TO_EDITOR_FIELDS: Dict[str, Set[str]] = {
     "URL": {"url"},
     "publisher": {"publisher"},
     "institution": {"institution"},
+    "language": {"language"},
 }
 
 
