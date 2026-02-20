@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from .model import Issue, Record, Severity, RecordType
 
@@ -106,3 +106,21 @@ def validate_records(records: List[Record]) -> List[Issue]:
     for r in records:
         all_issues.extend(validate_record(r))
     return all_issues
+
+
+def filter_issues_for_fields(issues: List[Issue], relevant_fields: Set[str]) -> List[Issue]:
+    """
+    Return only issues whose field is relevant to the given editor field set.
+
+    validate.py가 "volume/issue"처럼 복합 필드명을 쓰는 경우를 처리:
+    relevant_fields에 "volume" 또는 "issue" 중 하나라도 있으면 포함.
+    """
+    result: List[Issue] = []
+    for issue in issues:
+        f = issue.field
+        if f == "volume/issue":
+            if "volume" in relevant_fields or "issue" in relevant_fields:
+                result.append(issue)
+        elif f in relevant_fields:
+            result.append(issue)
+    return result
