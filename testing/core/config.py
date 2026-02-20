@@ -12,7 +12,6 @@ from .paths import user_data_dir
 class AppConfig:
     last_style: str = "builtin:kr_default"
     last_sort: str = "author_year"
-    csl_folder: str = ""  # 사용자가 지정한 CSL 파일 폴더 경로
 
 
 def config_path() -> Path:
@@ -30,7 +29,6 @@ def load_config() -> AppConfig:
         return AppConfig(
             last_style=str(data.get("last_style", "builtin:kr_default")),
             last_sort=str(data.get("last_sort", "author_year")),
-            csl_folder=str(data.get("csl_folder", "")),
         )
     except Exception:
         return AppConfig()
