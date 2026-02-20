@@ -19,7 +19,7 @@ from core.validate import validate_record
 from core.formatting import format_references
 
 # ✅ styles registry (builtin + csl)
-from core.style_registry import list_styles
+from core.style_registry import list_styles, editor_fields_for_csl
 
 # ✅ step 5: config + paths
 from core.config import load_config, save_config, AppConfig
@@ -125,6 +125,7 @@ class MainWindow(QMainWindow):
 
         editor_box = QGroupBox("레코드 편집 (WYSIWYG-ish)")
         form = QFormLayout(editor_box)
+        self.editor_form = form
 
         self.type_combo = QComboBox()
         self.type_combo.addItems([t.value for t in RecordType])
@@ -161,6 +162,22 @@ class MainWindow(QMainWindow):
         form.addRow("URL", self.url_edit)
         form.addRow("출판사", self.publisher_edit)
         form.addRow("기관(학위/보고서)", self.institution_edit)
+
+        self.editor_field_widgets = {
+            "type": self.type_combo,
+            "title": self.title_edit,
+            "title_alt": self.title_alt_edit,
+            "year": self.year_spin,
+            "authors": self.authors_edit,
+            "container_title": self.container_edit,
+            "volume": self.volume_edit,
+            "issue": self.issue_edit,
+            "pages": self.pages_edit,
+            "doi": self.doi_edit,
+            "url": self.url_edit,
+            "publisher": self.publisher_edit,
+            "institution": self.institution_edit,
+        }
 
         self.issues_box = QGroupBox("이슈(누락/형식 경고)")
         issues_l = QVBoxLayout(self.issues_box)
@@ -217,6 +234,7 @@ class MainWindow(QMainWindow):
 
         # Populate style list (also restores last style)
         self._reload_styles()
+        self._apply_editor_field_visibility_for_style()
 
         # Wire signals
         self.btn_open.clicked.connect(self.on_open_folder)
@@ -319,6 +337,26 @@ class MainWindow(QMainWindow):
         self.cfg.last_sort = self._current_sort_mode()
         save_config(self.cfg)
 
+    def _apply_editor_field_visibility_for_style(self):
+        """
+        현재 선택한 스타일 기준으로 편집 필드 노출을 조정.
+        - builtin: 전체 필드 표시
+        - csl: 스타일에서 사용되는 변수에 매핑된 필드만 표시
+        """
+        style_selector = self._current_style_selector()
+
+        visible_fields = set(self.editor_field_widgets.keys())
+
+        if style_selector.startswith("csl:"):
+            csl_path = style_selector.split(":", 1)[1]
+            csl_fields = editor_fields_for_csl(csl_path)
+            if csl_fields:
+                # type은 사용자가 레코드 유형을 맞추는 핵심이므로 항상 표시
+                visible_fields = {"type"} | csl_fields
+
+        for key, widget in self.editor_field_widgets.items():
+            self.editor_form.setRowVisible(widget, key in visible_fields)
+
     def on_refresh_styles(self):
         """
         styles 폴더를 다시 스캔해서 콤보박스 갱신.
@@ -328,6 +366,7 @@ class MainWindow(QMainWindow):
         user_styles_dir().mkdir(parents=True, exist_ok=True)
 
         self._reload_styles()
+        self._apply_editor_field_visibility_for_style()
         self._persist_ui_config()
 
         # 프로젝트가 있으면 즉시 반영
@@ -499,6 +538,7 @@ class MainWindow(QMainWindow):
         - 프로젝트 있으면 설정 반영 + 미리보기 갱신
         """
         self._persist_ui_config()
+        self._apply_editor_field_visibility_for_style()
 
         if self.project:
             self.project.settings.style_id = self._current_style_selector()

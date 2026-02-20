@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Literal, Iterable
+from typing import Dict, List, Optional, Literal, Iterable, Set
 import xml.etree.ElementTree as ET
 
 from .paths import app_styles_dir, user_styles_dir
@@ -26,6 +27,68 @@ class StyleRef:
 
 def _safe_text(x: Optional[str]) -> str:
     return (x or "").strip()
+
+
+def _split_csl_variables(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    return [v.strip() for v in value.split() if v.strip()]
+
+
+@lru_cache(maxsize=64)
+def csl_variables_used(csl_path: str | Path) -> Set[str]:
+    """
+    Return variable names used by a CSL style.
+
+    We scan all XML elements for a `variable` attribute and split on spaces,
+    which matches CSL usage patterns like: variable="author editor".
+    """
+    p = Path(csl_path).expanduser().resolve()
+    used: Set[str] = set()
+
+    try:
+        tree = ET.parse(str(p))
+        root = tree.getroot()
+        for el in root.iter():
+            for v in _split_csl_variables(el.attrib.get("variable")):
+                used.add(v)
+    except Exception:
+        return set()
+
+    return used
+
+
+# UI editor field keys used by MainWindow
+_CSL_VAR_TO_EDITOR_FIELDS: Dict[str, Set[str]] = {
+    "title": {"title"},
+    "title-short": {"title_alt"},
+    "author": {"authors"},
+    "issued": {"year"},
+    "container-title": {"container_title"},
+    "collection-title": {"container_title"},
+    "volume": {"volume"},
+    "issue": {"issue"},
+    "page": {"pages"},
+    "DOI": {"doi"},
+    "URL": {"url"},
+    "publisher": {"publisher"},
+    "institution": {"institution"},
+}
+
+
+def editor_fields_for_csl(csl_path: str | Path) -> Set[str]:
+    """
+    Infer which GUI editor fields are relevant for the given CSL style.
+    """
+    vars_used = csl_variables_used(csl_path)
+    if not vars_used:
+        return set()
+
+    fields: Set[str] = set()
+    for var_name in vars_used:
+        fields |= _CSL_VAR_TO_EDITOR_FIELDS.get(var_name, set())
+
+    return fields
 
 
 def read_csl_style_title(csl_path: str | Path) -> str:
