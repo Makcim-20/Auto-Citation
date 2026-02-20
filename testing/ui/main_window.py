@@ -383,31 +383,32 @@ class MainWindow(QMainWindow):
         self, record_type: Optional[RecordType] = None
     ):
         """
-        (스타일 × RecordType) 교집합으로 편집 필드 노출 결정.
+        편집 필드 노출 결정.
         - record_type이 None이면 현재 레코드의 타입 사용 (없으면 전체 표시)
-        - builtin 스타일: 타입 기반 필드만 표시
-        - csl 스타일: (타입 기반 필드) ∩ (CSL에서 사용하는 필드)
+        - CSL 스타일: CSL 파일의 <if type="..."> 분석으로 타입별 필드 직접 결정
+          → TYPE_FIELDS 수동 관리 불필요, CSL만 바꾸면 자동 반영
+        - builtin 스타일: TYPE_FIELDS 기반 (fallback)
         """
-        # 현재 타입 결정
         if record_type is None and self.current_record:
             record_type = self.current_record.type
-
-        if record_type is not None:
-            type_fields: set = fields_for_type(record_type)
-        else:
-            type_fields = set(self.editor_field_widgets.keys())
 
         style_selector = self._current_style_selector()
 
         if style_selector.startswith("csl:"):
             csl_path = style_selector.split(":", 1)[1]
-            csl_fields = editor_fields_for_csl(csl_path)
+            # CSL 파일 자체가 타입별 필드를 정의한다
+            csl_fields = editor_fields_for_csl(csl_path, record_type=record_type)
             if csl_fields:
-                visible_fields = type_fields & csl_fields
+                visible_fields = csl_fields
             else:
-                visible_fields = type_fields
+                # CSL 파싱 실패 등 예외 상황 → 전체 표시
+                visible_fields = set(self.editor_field_widgets.keys())
         else:
-            visible_fields = type_fields
+            # builtin: TYPE_FIELDS 기반
+            if record_type is not None:
+                visible_fields = fields_for_type(record_type)
+            else:
+                visible_fields = set(self.editor_field_widgets.keys())
 
         # type 선택기는 항상 표시
         visible_fields = visible_fields | {"type"}
