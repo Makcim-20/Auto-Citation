@@ -1,0 +1,5 @@
+PySide6>=6.6.0
+openpyxl>=3.1.0
+citeproc-py>=0.6.0
+lxml>=4.9.0
+six>=1.16.0

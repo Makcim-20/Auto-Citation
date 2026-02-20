@@ -1,0 +1,77 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  workflow_dispatch:   # 수동 실행 버튼
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. 코드 체크아웃 ──────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python 설치 ────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 3. 의존성 설치 ────────────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      # ── 4. PyInstaller 빌드 ───────────────────────────────────────────────
+      - name: Build EXE with PyInstaller
+        run: |
+          pyinstaller auto_citation.spec --clean --noconfirm
+
+      # ── 5. 배포 패키지 만들기 (EXE + 샘플 데이터) ────────────────────────
+      - name: Package distribution ZIP
+        run: |
+          mkdir dist_package
+          copy dist\AutoCitation.exe dist_package\AutoCitation.exe
+          xcopy testing\Database dist_package\Database /E /I
+        shell: cmd
+
+      - name: Create ZIP archive
+        run: |
+          Compress-Archive -Path dist_package\* -DestinationPath AutoCitation-Windows.zip
+        shell: powershell
+
+      # ── 6. 아티팩트 업로드 (Actions 탭에서 다운로드 가능) ─────────────────
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCitation-Windows-EXE
+          path: AutoCitation-Windows.zip
+          retention-days: 30
+
+      # ── 7. 태그 푸시 시 GitHub Release 자동 생성 ─────────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AutoCitation-Windows.zip
+          name: "Auto-Citation ${{ github.ref_name }}"
+          body: |
+            ## Auto-Citation ${{ github.ref_name }}
+
+            ### 설치 방법
+            1. `AutoCitation-Windows.zip` 다운로드
+            2. 압축 해제
+            3. `AutoCitation.exe` 실행 (Python 설치 불필요)
+
+            ### 포함 파일
+            - `AutoCitation.exe` — 메인 실행 파일
+            - `Database/` — 샘플 RIS 파일 (책, 학술지, 학위논문)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
