@@ -7,9 +7,53 @@ from typing import Dict, List, Optional, Literal, Iterable, Set
 import xml.etree.ElementTree as ET
 
 from .paths import app_styles_dir, user_styles_dir
+from .model import RecordType
 
 
 StyleKind = Literal["builtin", "csl"]
+
+
+# RecordType별로 의미 있는 에디터 필드 집합
+# "type" 필드는 항상 표시되므로 여기엔 포함하지 않는다.
+TYPE_FIELDS: Dict[RecordType, Set[str]] = {
+    RecordType.JOURNAL_ARTICLE: {
+        "title", "title_alt", "authors", "year",
+        "container_title", "volume", "issue", "pages", "doi", "url",
+    },
+    RecordType.BOOK: {
+        "title", "title_alt", "authors", "year",
+        "publisher", "doi", "url",
+    },
+    RecordType.BOOK_CHAPTER: {
+        "title", "title_alt", "authors", "year",
+        "container_title", "publisher", "pages", "doi", "url",
+    },
+    RecordType.CONFERENCE_PAPER: {
+        "title", "title_alt", "authors", "year",
+        "container_title", "pages", "publisher", "doi", "url",
+    },
+    RecordType.THESIS: {
+        "title", "title_alt", "authors", "year",
+        "institution", "publisher", "url",
+    },
+    RecordType.REPORT: {
+        "title", "title_alt", "authors", "year",
+        "institution", "publisher", "doi", "url",
+    },
+    RecordType.WEBPAGE: {
+        "title", "title_alt", "authors", "year", "url",
+    },
+    RecordType.OTHER: {
+        "title", "title_alt", "authors", "year",
+        "container_title", "volume", "issue", "pages",
+        "doi", "url", "publisher", "institution",
+    },
+}
+
+
+def fields_for_type(record_type: RecordType) -> Set[str]:
+    """해당 RecordType에서 의미 있는 에디터 필드 키 집합 반환."""
+    return set(TYPE_FIELDS.get(record_type, TYPE_FIELDS[RecordType.OTHER]))
 
 
 @dataclass(frozen=True)

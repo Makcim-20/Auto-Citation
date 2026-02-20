@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Dict
 
-from PySide6.QtCore import Qt, QSignalBlocker
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QSignalBlocker, QTimer
+from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QFileDialog, QMessageBox,
     QVBoxLayout, QHBoxLayout, QSplitter, QListWidget, QListWidgetItem,
@@ -18,11 +19,15 @@ from core.normalize import normalize_record
 from core.validate import validate_record, filter_issues_for_fields
 from core.formatting import format_references
 
-# ✅ styles registry (builtin + csl)
-from core.style_registry import list_styles, editor_fields_for_csl
+# styles registry (builtin + csl + type fields)
+from core.style_registry import list_styles, editor_fields_for_csl, fields_for_type
 
-# ✅ step 5: config + paths
+# config
 from core.config import load_config, save_config, AppConfig
+
+_UNDO_DEBOUNCE = 0.8   # 초: 이 시간 내 연속 입력은 하나의 undo 단계로 묶임
+_MAX_UNDO_DEPTH = 50   # 레코드당 최대 undo 스텝 수
+_AUTOSAVE_DELAY_MS = 2000  # 자동저장 딜레이(ms)
 
 
 @dataclass
@@ -68,8 +73,19 @@ class MainWindow(QMainWindow):
         self.project: Optional[Project] = None
         self.current_record: Optional[Record] = None
 
-        # ✅ Step 5: config load (last style/sort)
+        # config load (last style/sort/csl_folder)
         self.cfg: AppConfig = load_config()
+
+        # undo/redo: record.id → list of Record.to_dict() snapshots
+        self._undo_stacks: Dict[str, List[Dict]] = {}
+        self._redo_stacks: Dict[str, List[Dict]] = {}
+        self._last_undo_push: Dict[str, float] = {}  # record.id → monotonic timestamp
+
+        # 자동저장 타이머 (마지막 편집 후 _AUTOSAVE_DELAY_MS 경과 시 저장)
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(_AUTOSAVE_DELAY_MS)
+        self._autosave_timer.timeout.connect(self._do_autosave)
 
         # ----- Top toolbar-ish row -----
         top = QWidget()
@@ -83,6 +99,14 @@ class MainWindow(QMainWindow):
         self.lbl_csl_folder = QLabel("CSL 폴더: (미지정)")
         self.lbl_csl_folder.setToolTip("이 폴더 안의 .csl 파일이 스타일 목록에 표시됩니다")
 
+        self.btn_undo = QPushButton("↩ 되돌리기")
+        self.btn_undo.setToolTip("이전 상태로 되돌리기 (Ctrl+Z)")
+        self.btn_undo.setEnabled(False)
+
+        self.btn_redo = QPushButton("↪ 다시실행")
+        self.btn_redo.setToolTip("되돌리기 취소 (Ctrl+Y)")
+        self.btn_redo.setEnabled(False)
+
         self.btn_save = QPushButton("저장(원본 RIS 반영)")
         self.btn_export = QPushButton("내보내기(output)")
         self.btn_copy_all = QPushButton("전체 참고문헌 복사")
@@ -95,6 +119,9 @@ class MainWindow(QMainWindow):
         top_l.addWidget(self.btn_reload)
         top_l.addWidget(self.btn_csl_folder)
         top_l.addWidget(self.lbl_csl_folder)
+        top_l.addSpacing(8)
+        top_l.addWidget(self.btn_undo)
+        top_l.addWidget(self.btn_redo)
         top_l.addSpacing(12)
         top_l.addWidget(QLabel("스타일"))
         top_l.addWidget(self.style_combo)
@@ -244,7 +271,14 @@ class MainWindow(QMainWindow):
         self.btn_open.clicked.connect(self.on_open_folder)
         self.btn_reload.clicked.connect(self.on_reload)
         self.btn_csl_folder.clicked.connect(self.on_select_csl_folder)
+        self.btn_undo.clicked.connect(self.on_undo)
+        self.btn_redo.clicked.connect(self.on_redo)
         self.btn_save.clicked.connect(self.on_save_back)
+
+        # 키보드 단축키
+        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.on_undo)
+        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.on_redo)
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self).activated.connect(self.on_redo)
         self.btn_export.clicked.connect(self.on_export)
         self.btn_copy_all.clicked.connect(self.on_copy_all)
 
@@ -345,22 +379,38 @@ class MainWindow(QMainWindow):
         self.cfg.last_sort = self._current_sort_mode()
         save_config(self.cfg)
 
-    def _apply_editor_field_visibility_for_style(self):
+    def _apply_editor_field_visibility_for_style(
+        self, record_type: Optional[RecordType] = None
+    ):
         """
-        현재 선택한 스타일 기준으로 편집 필드 노출을 조정.
-        - builtin: 전체 필드 표시
-        - csl: 스타일에서 사용되는 변수에 매핑된 필드만 표시
+        (스타일 × RecordType) 교집합으로 편집 필드 노출 결정.
+        - record_type이 None이면 현재 레코드의 타입 사용 (없으면 전체 표시)
+        - builtin 스타일: 타입 기반 필드만 표시
+        - csl 스타일: (타입 기반 필드) ∩ (CSL에서 사용하는 필드)
         """
-        style_selector = self._current_style_selector()
+        # 현재 타입 결정
+        if record_type is None and self.current_record:
+            record_type = self.current_record.type
 
-        visible_fields = set(self.editor_field_widgets.keys())
+        if record_type is not None:
+            type_fields: set = fields_for_type(record_type)
+        else:
+            type_fields = set(self.editor_field_widgets.keys())
+
+        style_selector = self._current_style_selector()
 
         if style_selector.startswith("csl:"):
             csl_path = style_selector.split(":", 1)[1]
             csl_fields = editor_fields_for_csl(csl_path)
             if csl_fields:
-                # type은 사용자가 레코드 유형을 맞추는 핵심이므로 항상 표시
-                visible_fields = {"type"} | csl_fields
+                visible_fields = type_fields & csl_fields
+            else:
+                visible_fields = type_fields
+        else:
+            visible_fields = type_fields
+
+        # type 선택기는 항상 표시
+        visible_fields = visible_fields | {"type"}
 
         for key, widget in self.editor_field_widgets.items():
             self.editor_form.setRowVisible(widget, key in visible_fields)
@@ -397,6 +447,109 @@ class MainWindow(QMainWindow):
             self.project.settings.sort_mode = self._current_sort_mode()  # type: ignore
             self._refresh_all_preview()
             self._refresh_one_preview()
+
+    # -----------------------------
+    # Undo / Redo
+    # -----------------------------
+
+    def _push_undo_snapshot(self, r: Record) -> None:
+        """현재 Record 상태를 undo 스택에 저장하고 redo 스택을 초기화."""
+        stack = self._undo_stacks.setdefault(r.id, [])
+        stack.append(r.to_dict())
+        if len(stack) > _MAX_UNDO_DEPTH:
+            stack.pop(0)
+        # 새 액션이 생겼으므로 redo 스택 삭제
+        self._redo_stacks.pop(r.id, None)
+        self._update_undo_redo_buttons(r.id)
+
+    def _apply_record_snapshot(self, target: Record, snap: dict) -> None:
+        """snap 딕셔너리의 내용을 target Record에 덮어씀."""
+        src = Record.from_dict(snap)
+        target.type = src.type
+        target.title = src.title
+        target.title_alt = src.title_alt
+        target.year = src.year
+        target.authors = src.authors
+        target.container_title = src.container_title
+        target.volume = src.volume
+        target.issue = src.issue
+        target.pages = src.pages
+        target.doi = src.doi
+        target.url = src.url
+        target.publisher = src.publisher
+        target.institution = src.institution
+        target.dirty = True
+
+    def _update_undo_redo_buttons(self, record_id: Optional[str]) -> None:
+        can_undo = bool(record_id and self._undo_stacks.get(record_id))
+        can_redo = bool(record_id and self._redo_stacks.get(record_id))
+        self.btn_undo.setEnabled(can_undo)
+        self.btn_redo.setEnabled(can_redo)
+
+    def on_undo(self) -> None:
+        r = self.current_record
+        if not r:
+            return
+        stack = self._undo_stacks.get(r.id, [])
+        if not stack:
+            return
+        # 현재 상태 → redo 스택
+        redo_stack = self._redo_stacks.setdefault(r.id, [])
+        redo_stack.append(r.to_dict())
+        # 이전 상태 복원
+        snap = stack.pop()
+        self._apply_record_snapshot(r, snap)
+        self._last_undo_push.pop(r.id, None)  # 복원 후 다음 편집은 새 스냅샷으로
+        self._sync_editor_from_record(r)
+
+    def on_redo(self) -> None:
+        r = self.current_record
+        if not r:
+            return
+        stack = self._redo_stacks.get(r.id, [])
+        if not stack:
+            return
+        # 현재 상태 → undo 스택
+        undo_stack = self._undo_stacks.setdefault(r.id, [])
+        undo_stack.append(r.to_dict())
+        # redo 상태 복원
+        snap = stack.pop()
+        self._apply_record_snapshot(r, snap)
+        self._last_undo_push.pop(r.id, None)
+        self._sync_editor_from_record(r)
+
+    def _sync_editor_from_record(self, r: Record) -> None:
+        """Record 상태를 에디터 UI에 반영하고 미리보기 갱신."""
+        self._load_record_into_editor(r)
+        self._apply_editor_field_visibility_for_style(record_type=r.type)
+        normalize_record(r, mark_dirty=False)
+        validate_record(r)
+        idx = self.list_records.currentRow()
+        if idx >= 0:
+            self.list_records.item(idx).setText(_record_label(r))
+        self._refresh_one_preview()
+        self._refresh_all_preview()
+        self._refresh_issues_view(r)
+        self._update_undo_redo_buttons(r.id)
+
+    # -----------------------------
+    # Auto-save
+    # -----------------------------
+
+    def _do_autosave(self) -> None:
+        """dirty 레코드를 조용히 원본 파일에 저장."""
+        if not self.project:
+            return
+        dirty = [rec for rec in self.project.records if rec.dirty]
+        if not dirty:
+            return
+        try:
+            save_project_back_to_sources(self.project, only_dirty=True, encoding="utf-8")
+            orig_title = self.windowTitle().replace(" [자동저장됨]", "")
+            self.setWindowTitle(orig_title + " [자동저장됨]")
+            QTimer.singleShot(2000, lambda: self.setWindowTitle(orig_title))
+        except Exception:
+            pass  # 자동저장 실패는 조용히 무시
 
     # -----------------------------
     # Folder load / project
@@ -456,13 +609,16 @@ class MainWindow(QMainWindow):
     def on_select_record(self, row: int):
         if not self.project or row < 0 or row >= len(self.project.records):
             self.current_record = None
+            self._update_undo_redo_buttons(None)
             return
 
         r = self.project.records[row]
         self.current_record = r
         self._load_record_into_editor(r)
+        self._apply_editor_field_visibility_for_style(record_type=r.type)
         self._refresh_one_preview()
         self._refresh_issues_view(r)
+        self._update_undo_redo_buttons(r.id)
 
     def _load_record_into_editor(self, r: Record):
         blockers = [
@@ -509,10 +665,20 @@ class MainWindow(QMainWindow):
         try:
             tval = self.type_combo.currentText()
             try:
-                r.type = RecordType(tval)
+                new_type = RecordType(tval)
             except Exception:
-                r.type = RecordType.OTHER
+                new_type = RecordType.OTHER
 
+            # ─── Undo 스냅샷 (변경 적용 전) ───────────────────────────────
+            type_changed = (new_type != r.type)
+            now = time.monotonic()
+            last_push = self._last_undo_push.get(r.id, 0.0)
+            if type_changed or (now - last_push > _UNDO_DEBOUNCE):
+                self._push_undo_snapshot(r)
+                self._last_undo_push[r.id] = now
+            # ──────────────────────────────────────────────────────────────
+
+            r.type = new_type
             r.title = self.title_edit.text().strip() or None
             r.title_alt = self.title_alt_edit.text().strip() or None
 
@@ -534,6 +700,10 @@ class MainWindow(QMainWindow):
             validate_record(r)
             r.dirty = True
 
+            # 타입이 바뀌면 표시 필드도 즉시 갱신
+            if type_changed:
+                self._apply_editor_field_visibility_for_style(record_type=r.type)
+
             idx = self.list_records.currentRow()
             if idx >= 0:
                 self.list_records.item(idx).setText(_record_label(r))
@@ -541,6 +711,9 @@ class MainWindow(QMainWindow):
             self._refresh_one_preview()
             self._refresh_all_preview()
             self._refresh_issues_view(r)
+
+            # 자동저장 타이머 재시작
+            self._autosave_timer.start()
 
         except Exception as e:
             QMessageBox.warning(self, "편집 반영 실패", f"{type(e).__name__}: {e}")
