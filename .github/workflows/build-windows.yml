@@ -1,0 +1,53 @@
+name: Build Windows Executable
+
+on:
+  push:
+    tags:
+      - 'v*'          # v1.0.0 같은 태그 푸시 시 자동 릴리즈
+  workflow_dispatch:   # GitHub 웹에서 수동 실행도 가능
+    inputs:
+      release_tag:
+        description: '릴리즈 태그 (예: v1.0.0). 비워두면 아티팩트만 업로드.'
+        required: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        run: pyinstaller auto_citation.spec
+
+      - name: Zip dist folder
+        run: |
+          cd dist
+          Compress-Archive -Path AutoCitation -DestinationPath AutoCitation-windows.zip
+
+      - name: Upload artifact (항상)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCitation-windows
+          path: dist/AutoCitation-windows.zip
+          retention-days: 30
+
+      # 태그 푸시일 때 → GitHub Release 생성 + zip 첨부
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/AutoCitation-windows.zip
+          generate_release_notes: true
